@@ -5,7 +5,7 @@ import sys
 import tempfile
 import unittest
 
-from agent_tools import doctor
+from agentbelt import doctor
 
 
 class VersionRanges(unittest.TestCase):

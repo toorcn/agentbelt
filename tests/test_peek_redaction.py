@@ -12,7 +12,7 @@ import sys
 import tempfile
 import unittest
 
-from agent_tools import peek
+from agentbelt import peek
 
 PEEK = peek.__file__
 

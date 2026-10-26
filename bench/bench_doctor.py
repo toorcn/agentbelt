@@ -13,7 +13,7 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DOCTOR = os.path.join(HERE, "..", "src", "agent_tools", "doctor.py")
+DOCTOR = os.path.join(HERE, "..", "src", "agentbelt", "doctor.py")
 SELF = os.path.basename(os.path.dirname(HERE))
 
 # What an agent typically runs to orient itself in an unfamiliar repository.

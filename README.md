@@ -1,4 +1,4 @@
-# agent-tools-lab
+# agentbelt
 
 Three small command-line tools for coding agents. Each one replaces a sequence of shell commands that agents
 commonly get wrong or spend too many tokens on.
@@ -14,7 +14,7 @@ pip install .
 ```
 
 This installs the `pw`, `peek` and `doctor` commands. They need Python 3.9 or newer and nothing else.
-Each tool is also a standalone file, so `python3 src/agent_tools/peek.py data.json` works without installing.
+Each tool is also a standalone file, so `python3 src/agentbelt/peek.py data.json` works without installing.
 Tested on macOS with Python 3.9, 3.11, 3.12, 3.13 and 3.14.
 
 ## pw

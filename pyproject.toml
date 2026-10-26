@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agent-tools-lab"
+name = "agentbelt"
 dynamic = ["version"]
 description = "Command-line tools for coding agents: dev-server management, large-file summaries, and repo diagnostics"
 readme = "README.md"
@@ -23,12 +23,12 @@ classifiers = [
 ]
 
 [project.scripts]
-pw = "agent_tools.pw:main"
-peek = "agent_tools.peek:main"
-doctor = "agent_tools.doctor:main"
+pw = "agentbelt.pw:main"
+peek = "agentbelt.peek:main"
+doctor = "agentbelt.doctor:main"
 
 [tool.setuptools.dynamic]
-version = { attr = "agent_tools.__version__" }
+version = { attr = "agentbelt.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]

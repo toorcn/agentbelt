@@ -11,7 +11,7 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PEEK = os.path.join(HERE, "..", "src", "agent_tools", "peek.py")
+PEEK = os.path.join(HERE, "..", "src", "agentbelt", "peek.py")
 SKIP_DIRS = {"node_modules", ".git", ".venv", "venv", ".next", "dist", "build"}
 EXTENSIONS = {".json", ".jsonl", ".ndjson", ".csv", ".tsv", ".log", ".db", ".sqlite", ".sqlite3"}
 MIN_BYTES = 50_000

@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 
-from agent_tools import pw
+from agentbelt import pw
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 
