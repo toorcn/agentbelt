@@ -1,3 +1,6 @@
 .pw/
 __pycache__/
 bench/*_results.json
+dist/
+build/
+*.egg-info/

@@ -7,22 +7,30 @@ commonly get wrong or spend too many tokens on.
 - **peek** summarizes large JSON, JSONL, CSV, SQLite, and log files in a few hundred tokens.
 - **doctor** reports how a repository is built and run, and what is missing on this machine.
 
-Each tool is a single Python file with no dependencies. They were tested with Python 3.12 on macOS.
+## Install
+
+```bash
+pip install .
+```
+
+This installs the `pw`, `peek` and `doctor` commands. They need Python 3.9 or newer and nothing else.
+Each tool is also a standalone file, so `python3 src/agent_tools/peek.py data.json` works without installing.
+Tested on macOS with Python 3.9, 3.11, 3.12, 3.13 and 3.14.
 
 ## pw
 
 ```console
-$ python3 pw.py start web -- node server.js
+$ pw start web -- node server.js
 READY in 1.8s (port 3000 accepting connections)
 web: running pid 47483, up 1s, http://localhost:3000 listening
   cmd: node server.js  (cwd .)
   last log line:
     ready on http://localhost:3000
 
-$ python3 pw.py start web2 --port 3000 -- node server.js
+$ pw start web2 --port 3000 -- node server.js
 FAILED: port 3000 is already in use by node (pid 47483); web2 was not started
 
-$ python3 pw.py stop web
+$ pw stop web
 web: stopped (SIGTERM), port 3000 free
 ```
 
@@ -33,7 +41,7 @@ passes. `stop` signals the whole process group, so `npm run dev` and the server 
 ## peek
 
 ```console
-$ python3 peek.py runs.json
+$ peek runs.json
 runs.json  [json, 1.6MB]
 $: object
   runs: array (len 20000, schema from first 5000)
@@ -52,7 +60,7 @@ repeated line patterns. Values that look like credentials are redacted by field 
 ## doctor
 
 ```console
-$ python3 doctor.py acme-web
+$ doctor acme-web
 ## acme-web
 stack: node, next.js@15.1.0, react@19.0.0, typescript@5.7.2, drizzle@0.38.0
 toolchain:
@@ -79,6 +87,16 @@ note: unset but with a fallback in code (1): APP_REGION
 
 doctor is read-only. It never installs anything or runs project code, and it reports environment variable names
 but never their values. `--json` gives the same report as structured output.
+
+## Development
+
+```bash
+PYTHONPATH=src python3 -m unittest discover -s tests
+```
+
+The suite runs in about 8 seconds and covers credential redaction across every input format, doctor's version and
+environment-variable logic (including that it never writes to the repository), and the pw failure scenarios from the
+evaluation.
 
 ## Evaluation
 

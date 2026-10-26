@@ -26,24 +26,77 @@ ARRAY_SAMPLE = 5000     # array items scanned per array
 MAP_KEY_CAP = 500       # distinct keys tracked per object position
 DISTINCT_CAP = 100_000  # distinct scalar values tracked per position
 
-SECRET_NAME = re.compile(
-    r"pass(word|wd)? | secret | token | api[_-]?key | access[_-]?key | private[_-]?key"
-    r"| credential | auth | session | cookie | salt | hash",
-    re.I | re.X,
-)
+# ---------- credential redaction ----------
+# Anything peek prints lands in an agent's context, so credentials are masked by field name
+# (split into words, so `author` and `max_tokens` are left alone) and by known value formats.
+
+SECRET_WORDS = {
+    "password", "passwd", "pwd", "passphrase", "secret", "secrets", "token", "apikey", "accesskey", "secretkey",
+    "privatekey", "credential", "credentials", "auth", "authorization", "session", "sessionid", "cookie", "cookies",
+    "salt", "otp",
+}
+SECRET_PAIRS = {("api", "key"), ("access", "key"), ("private", "key"), ("secret", "key"), ("client", "secret"),
+                ("api", "secret"), ("session", "id")}
+NAME_WORD = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+")
+# Keys never start mid-word, so each format needs a boundary in front. Without it, URL slugs
+# (`desk-lamp-...`) and base64 image data trip the patterns.
 SECRET_VALUE = re.compile(
     r"""
-      sk-[A-Za-z0-9_-]{16,}                    # OpenAI-style
-    | sk_(live|test)_[A-Za-z0-9]{16,}          # Stripe
-    | gh[pousr]_[A-Za-z0-9]{30,}               # GitHub
-    | xox[abp]-[A-Za-z0-9-]{20,}               # Slack
-    | AKIA[0-9A-Z]{16}                         # AWS access key id
-    | AIza[0-9A-Za-z_-]{35}                    # Google API key
-    | eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}  # JWT
+    (?<![A-Za-z0-9+/_-])
+    (?:
+      sk-[A-Za-z0-9_-]{16,}                        # OpenAI, Anthropic
+    | [sr]k_(live|test)_[A-Za-z0-9]{16,}           # Stripe
+    | gh[pousr]_[A-Za-z0-9]{30,}                   # GitHub
+    | github_pat_[A-Za-z0-9_]{40,}                 # GitHub fine-grained
+    | xox[abprs]-[A-Za-z0-9-]{20,}                 # Slack
+    | AKIA[0-9A-Z]{16}                             # AWS access key id
+    | AIza[0-9A-Za-z_-]{35}                        # Google API key
+    | eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}    # JWT
     | -----BEGIN\ [A-Z\ ]*PRIVATE\ KEY-----
+    | [a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@      # user:password@ in a URL
+    )
     """,
     re.X,
 )
+# key=value / key: value / "key": "value" pairs in free text, where the key names a secret.
+# Pure numbers are left alone (max_tokens=4096).
+SECRET_PAIR_TEXT = re.compile(
+    r"""
+    (?P<key>["']?[\w.-]*?(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key
+                          |authorization|cookie|session[_-]?id|credential)s?[\w.-]*["']?)
+    (?P<sep>\s*[:=]\s*["']?)
+    (?!\d+(?:\.\d+)?\b)
+    (?P<value>(?:bearer\s+|basic\s+)?[^\s"',;&}]+)
+    """,
+    re.I | re.X,
+)
+BEARER = re.compile(r"\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{16,}", re.I)
+MASK = "<redacted>"
+
+
+def name_words(name):
+    return [w.lower() for w in NAME_WORD.findall(name or "")]
+
+
+def is_secret_name(name):
+    words = name_words(name)
+    return any(w in SECRET_WORDS for w in words) or any(pair in SECRET_PAIRS for pair in zip(words, words[1:]))
+
+
+def redact(v, name="", secret=False):
+    """Mask a value if its field name or its own format says it is a credential."""
+    if isinstance(v, (bytes, bytearray, memoryview)):
+        return f"<blob {len(v)}B>"
+    if isinstance(v, str) and v and (secret or is_secret_name(name) or SECRET_VALUE.search(v)):
+        return f"<redacted {len(v)} chars>"
+    return v
+
+
+def redact_text(line):
+    """Mask credentials inside free text such as log lines."""
+    line = SECRET_PAIR_TEXT.sub(lambda m: m.group("key") + m.group("sep") + MASK, line)
+    line = BEARER.sub(lambda m: m.group(1) + " " + MASK, line)
+    return SECRET_VALUE.sub(MASK, line)
 
 
 def human(n):
@@ -54,17 +107,8 @@ def human(n):
     return f"{n:.1f}TB"
 
 
-def redact(v, name=""):
-    """Never echo credentials into an agent's context: mask by column/key name or by value shape."""
-    if isinstance(v, (bytes, bytearray, memoryview)):
-        return f"<blob {len(v)}B>"
-    if isinstance(v, str) and v and (SECRET_NAME.search(name or "") or SECRET_VALUE.search(v)):
-        return f"<redacted {len(v)} chars>"
-    return v
-
-
-def short(v, name=""):
-    v = redact(v, name)
+def short(v, name="", secret=False):
+    v = redact(v, name, secret)
     s = json.dumps(v, ensure_ascii=False) if not isinstance(v, str) else v
     s = s.replace("\n", "\\n")
     return s if len(s) <= MAX_STR else s[: MAX_STR - 1] + "…"
@@ -169,7 +213,8 @@ def looks_like_map(node):
     return rare / len(node.keys) > 0.8
 
 
-def render(node, name, indent, out, parent_count):
+def render(node, name, indent, out, parent_count, secret=False):
+    secret = secret or is_secret_name(name)
     pad = "  " * indent
     types = "|".join(t for t, _ in node.types.most_common())
     opt = "" if node.count >= parent_count else f"  (in {node.count}/{parent_count})"
@@ -181,14 +226,14 @@ def render(node, name, indent, out, parent_count):
             keys = ", ".join(short(k) for k in list(node.keys)[:3])
             out.append(f"{pad}{name}: map<str, {'|'.join(merged.types)}> {node.max_keys} keys, e.g. {keys}{opt}")
             # every value of a map shares one merged schema
-            render(merged, "<value>", indent + 1, out, merged.count)
+            render(merged, "<value>", indent + 1, out, merged.count, secret)
             return
         out.append(f"{pad}{name}: {types}{opt}")
         for i, (k, child) in enumerate(sorted(node.keys.items(), key=lambda kv: -node.key_count[kv[0]])):
             if i >= MAX_KEYS:
                 out.append(f"{pad}  … {len(node.keys) - MAX_KEYS} more keys")
                 break
-            render(child, k, indent + 1, out, node.types["object"])
+            render(child, k, indent + 1, out, node.types["object"], secret)
     elif "array" in node.types:
         lens = node.lens
         ln = f"len {min(lens)}" if min(lens) == max(lens) else f"len {min(lens)}–{max(lens)}"
@@ -196,16 +241,16 @@ def render(node, name, indent, out, parent_count):
             ln += f", schema from first {ARRAY_SAMPLE}"
         out.append(f"{pad}{name}: array ({ln}){opt}")
         if node.items is not None and node.items.count:
-            render(node.items, "[]", indent + 1, out, node.items.count)
+            render(node.items, "[]", indent + 1, out, node.items.count, secret)
     else:
         bits = [types]
         if node.num_min is not None and node.num_min != node.num_max:
             bits.append(f"range {node.num_min}…{node.num_max}")
         nd = len(node.distinct)
         if node.types.get("str") and nd <= 8 and node.count > nd * 2:
-            bits.append("enum{" + ", ".join(short(x, name) for x in sorted(node.distinct, key=str)) + "}")
+            bits.append("enum{" + ", ".join(short(x, name, secret) for x in sorted(node.distinct, key=str)) + "}")
         elif node.examples:
-            bits.append("e.g. " + ", ".join(short(x, name) for x in node.examples[:2]))
+            bits.append("e.g. " + ", ".join(short(x, name, secret) for x in node.examples[:2]))
         if node.count > 1 and nd >= node.count and node.types.get("str", 0) + node.types.get("int", 0) == node.count:
             bits.append("unique")
         out.append(f"{pad}{name}: {'  '.join(bits)}{opt}")
@@ -240,12 +285,13 @@ def peek_json(path, args, out):
 
 def truncate_json(v, budget=1200):
     """Compact JSON with long strings/arrays/objects elided, roughly within budget chars."""
-    def trim(x, depth, key=""):
-        x = redact(x, key)
+    def trim(x, depth, key="", secret=False):
+        secret = secret or is_secret_name(key)
+        x = redact(x, key, secret)
         if isinstance(x, str):
             return x if len(x) <= MAX_STR else x[:MAX_STR] + "…"
         if isinstance(x, list):
-            items = [trim(i, depth + 1) for i in x[:3]]
+            items = [trim(i, depth + 1, secret=secret) for i in x[:3]]
             if len(x) > 3:
                 items.append(f"…+{len(x) - 3}")
             return items
@@ -257,7 +303,7 @@ def truncate_json(v, budget=1200):
                 if i >= 12:
                     d["…"] = f"+{len(x) - 12} keys"
                     break
-                d[k] = trim(val, depth + 1, k)
+                d[k] = trim(val, depth + 1, k, secret)
             return d
         return x
     s = json.dumps(trim(v, 0), ensure_ascii=False, indent=1)
@@ -381,6 +427,10 @@ def peek_csv(path, args, out):
 
 # ---------- SQLite ----------
 
+# settings-style tables (key, value) where the secret's name is data, not a column name
+KV_KEY_COLUMNS = {"key", "name", "option", "option_name", "setting", "config_key", "k"}
+KV_VALUE_COLUMNS = {"value", "val", "option_value", "setting_value", "config_value", "data", "v"}
+
 def peek_sqlite(path, args, out):
     con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     tables = con.execute(
@@ -401,8 +451,14 @@ def peek_sqlite(path, args, out):
         for fk in fks:
             out.append(f"  fk {fk[3]} -> {fk[2]}.{fk[4]}")
         names = [c[1] for c in cols]
+        lowered = [n.lower() for n in names]
+        key_col = next((i for i, n in enumerate(lowered) if n in KV_KEY_COLUMNS), None)
+        value_col = next((i for i, n in enumerate(lowered) if n in KV_VALUE_COLUMNS), None)
         for row in con.execute(f'select * from "{q}" limit {min(args.rows, 3)}'):
-            out.append("  " + " | ".join(short(v, n) for v, n in zip(row, names)))
+            row_names = list(names)
+            if key_col is not None and value_col is not None and is_secret_name(str(row[key_col])):
+                row_names[value_col] = str(row[key_col])
+            out.append("  " + " | ".join(short(v, n) for v, n in zip(row, row_names)))
 
 
 # ---------- logs / text ----------
@@ -436,7 +492,7 @@ def level_of(line):
 
 
 def norm(line):
-    line = SECRET_VALUE.sub("<redacted>", line)
+    line = redact_text(line)
     for rx, rep in NORMALIZERS:
         line = rx.sub(rep, line)
     return line.strip()[:160]
@@ -458,14 +514,14 @@ def peek_text(path, args, out):
                 first.append(line)
             tail.append(line)
             if TEST_SUMMARY.search(line):
-                summary.append(line.strip())
+                summary.append(redact_text(line.strip()))
             if FAIL_LINE.search(line) and len(fails) < 10:
-                fails.append((n, SECRET_VALUE.sub("<redacted>", line.strip()[:200])))
+                fails.append((n, redact_text(line.strip())[:200]))
             lv = level_of(line)
             if lv:
                 levels[lv] += 1
                 if lv in ("ERROR", "FATAL", "FAIL") and first_err is None:
-                    first_err = (n, SECRET_VALUE.sub("<redacted>", line[:300]))
+                    first_err = (n, redact_text(line)[:300])
             if line.strip():
                 p = norm(line)
                 patterns[p] += 1
@@ -491,9 +547,9 @@ def peek_text(path, args, out):
         for p in sorted(rare, key=first_seen.get)[:8]:
             out.append(f"  L{first_seen[p]}: {p}")
     out.append(f"\nfirst {len(first)} lines:")
-    out.extend("  " + SECRET_VALUE.sub("<redacted>", l[:200]) for l in first)
+    out.extend("  " + redact_text(l)[:200] for l in first)
     out.append(f"last {len(tail)} lines:")
-    out.extend("  " + SECRET_VALUE.sub("<redacted>", l[:200]) for l in tail)
+    out.extend("  " + redact_text(l)[:200] for l in tail)
 
 
 # ---------- main ----------
@@ -536,7 +592,8 @@ def main():
         # a summary of a tiny file costs about as much as the file itself
         print(f"{args.file}  [{kind}, {human(size)}, shown in full]")
         with open(args.file, encoding="utf-8", errors="replace") as f:
-            sys.stdout.write(f.read())
+            for line in f:
+                sys.stdout.write(redact_text(line))
         return
     out = []
     try:

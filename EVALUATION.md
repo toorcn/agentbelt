@@ -9,7 +9,7 @@ characters divided by four.
 |---|---|---|---|
 | Replaces | `cmd &`, `sleep`, `curl`, `kill` | `cat`, `head`, repeated `jq` | about 8 orientation commands |
 | Correctness | 4 of 4 scenarios (baseline: 0 of 4) | matched `jq` on spot checks | 7 of 8 sampled findings confirmed |
-| Output size | 150 to 400 tokens | median 828, max 2,877 tokens | median 137 tokens (baseline: 822) |
+| Output size | 150 to 400 tokens | median 828, max 2,897 tokens | median 137 tokens (baseline: 822) |
 | Speed | returns as soon as ready | under 0.5 s per file | median 0.18 s, under 4 s worst case |
 | Verdict | build first | build second | fold into something larger |
 
@@ -43,9 +43,20 @@ reports things those queries rarely show: the set of values a field takes, how o
 ranges, and whether an object is a record or a map keyed by IDs.
 
 The first version printed sample rows from a SQLite database that included a password column. Any tool that puts data in
-front of an agent should redact credentials. peek now masks values by field name and by known key formats (OpenAI, Stripe,
-GitHub, Slack, AWS, Google, JWTs, private keys). It can still miss a secret stored in a generic key/value table under an
-unremarkable column name, unless the value itself has a recognizable format.
+front of an agent should redact credentials. peek now masks values in three ways:
+
+- by field name, split into words so that `api_key`, `apiKey` and `STRIPE_SECRET_KEY` match but `author` and `max_tokens`
+  don't. Fields nested under a secret-named parent, such as `credentials.pass`, are masked too.
+- by value format: OpenAI, Anthropic, Stripe, GitHub, Slack, AWS and Google keys, JWTs, PEM private keys, and URLs with an
+  embedded password.
+- in free text, through `key=value` pairs and `Authorization` headers in log lines, and in settings tables (`key`, `value`)
+  whose key names a secret.
+
+Writing the test suite exposed five leaks in the earlier implementation. Among them: small files, which peek prints in
+full, skipped redaction entirely. Running the new rules on the 60-file corpus then exposed two false positives, a URL slug
+(`desk-lamp-…` contains `sk-`) and base64 image data, fixed by requiring a word boundary before each key format. Masking
+now fires in 3 of the 60 files, all on real session tokens. A secret with no recognizable name or format will still get
+through.
 
 Not yet supported: Parquet, Excel, and compressed files.
 
@@ -84,4 +95,4 @@ python3 bench/bench_peek.py path/to/repos
 python3 bench/bench_doctor.py path/to/repos
 ```
 
-The pw scenarios use the scripts in `fixtures/`.
+The pw scenarios run as tests: `python -m unittest discover -s tests` (fixtures are in `tests/fixtures/`).
