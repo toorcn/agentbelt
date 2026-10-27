@@ -1,9 +1,8 @@
 # Evaluation
 
 Each tool was compared with the shell commands an agent would otherwise run to get the same answer.
-The tests used 80 real repositories (web apps, hackathon projects, ML experiments, monorepos, and a few non-code
-folders), opened read-only, plus scripted reproductions of common dev-server failures. Token counts are estimated as
-characters divided by four.
+The tests used 80 real repositories, opened read-only, plus scripted reproductions of common dev-server failures.
+Token counts are estimated as characters divided by four.
 
 | | pw | peek | doctor |
 |---|---|---|---|
@@ -55,7 +54,7 @@ front of an agent should redact credentials. peek now masks values in three ways
 Writing the test suite exposed five leaks in the earlier implementation. Among them: small files, which peek prints in
 full, skipped redaction entirely. Running the new rules on the 60-file corpus then exposed two false positives, a URL slug
 (`desk-lamp-…` contains `sk-`) and base64 image data, fixed by requiring a word boundary before each key format. Masking
-now fires in 3 of the 60 files, all on real session tokens. A secret with no recognizable name or format will still get
+now fires in 3 of the 60 files, with no false positives. A secret with no recognizable name or format will still get
 through.
 
 Not yet supported: Parquet, Excel, and compressed files.
