@@ -5,13 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agentbelt"
 dynamic = ["version"]
-description = "Command-line tools for coding agents: dev-server management, large-file summaries, and repo diagnostics"
+description = "Command-line tools for agents: dev-server management, large-file summaries, repo diagnostics, and receipts for scheduled work"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.9"
 dependencies = []
-keywords = ["agents", "llm", "cli", "developer-tools", "dev-server"]
+keywords = ["agents", "llm", "cli", "developer-tools", "dev-server", "monitoring", "cron"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
@@ -26,6 +26,7 @@ classifiers = [
 pw = "agentbelt.pw:main"
 peek = "agentbelt.peek:main"
 doctor = "agentbelt.doctor:main"
+receipt = "agentbelt.receipt:main"
 
 [tool.setuptools.dynamic]
 version = { attr = "agentbelt.__version__" }

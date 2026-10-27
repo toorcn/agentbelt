@@ -18,6 +18,6 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: pip install .
-      - run: peek --help && pw --help && doctor --help
+      - run: peek --help && pw --help && doctor --help && receipt --help
       - run: python -m unittest discover -s tests -v
         working-directory: ${{ github.workspace }}

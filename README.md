@@ -1,11 +1,12 @@
 # agentbelt
 
-Three small command-line tools for coding agents. Each one replaces a sequence of shell commands that agents
-commonly get wrong or spend too many tokens on.
+Four small command-line tools for agents. Each one replaces a sequence of shell commands that agents commonly get
+wrong or spend too many tokens on, or catches a failure that agents don't report.
 
 - **pw** runs dev servers in the background and reports when they are ready, crashed, or blocked by a port conflict.
 - **peek** summarizes large JSON, JSONL, CSV, SQLite, and log files in a few hundred tokens.
 - **doctor** reports how a repository is built and run, and what is missing on this machine.
+- **receipt** notices when scheduled agent work, such as a daily digest or a backup, silently stops happening.
 
 ## Install
 
@@ -13,7 +14,7 @@ commonly get wrong or spend too many tokens on.
 pip install .
 ```
 
-This installs the `pw`, `peek` and `doctor` commands. They need Python 3.9 or newer and nothing else.
+This installs the `pw`, `peek`, `doctor` and `receipt` commands. They need Python 3.9 or newer and nothing else.
 Each tool is also a standalone file, so `python3 src/agentbelt/peek.py data.json` works without installing.
 Tested on macOS with Python 3.9, 3.11, 3.12, 3.13 and 3.14.
 
@@ -88,15 +89,46 @@ note: unset but with a fallback in code (1): APP_REGION
 doctor is read-only. It never installs anything or runs project code, and it reports environment variable names
 but never their values. `--json` gives the same report as structured output.
 
+## receipt
+
+A scheduled agent run can end with a normal reply when the work never happened, because the context ran out, a
+tool call timed out, or a message wasn't delivered. Process and container health checks pass. receipt checks the
+outcome instead: the agent files a receipt with evidence after it verifies the work, and a watcher run from cron
+outside the agents reports any receipt that doesn't arrive on time.
+
+```console
+$ receipt expect morning-digest --by 09:05 --grace 10m
+morning-digest: by 09:05 daily, grace 10m
+
+$ receipt add morning-digest --evidence message_id=1729 --evidence items=14
+recorded morning-digest at 08:58, on time for today 09:05
+
+$ receipt add feed-sync --evidence rows=1 --check "test -s /nonexistent/out.json"
+NOT RECORDED: check exited 1: test -s /nonexistent/out.json
+
+$ receipt check
+ok       feed-sync       last 2h ago
+MISSING  morning-digest  due today 09:05, no receipt (last receipt yesterday 08:58)
+LATE     nightly-backup  due today 03:30, done today 04:12 (42m late); next due tomorrow 03:30
+```
+
+Expectations are a daily or weekly deadline (`--by HH:MM --days weekdays`) or a maximum gap (`--every 6h`).
+`check` exits 1 when anything is missing, late or stale. `check --alert CMD` runs CMD once per missed deadline and
+once on recovery, so it can run every few minutes from cron without repeating alerts.
+
+[skills/receipts/SKILL.md](skills/receipts/SKILL.md) is an agent skill that teaches agents when to file a receipt,
+and when not to: never before the result is verified, and never for partial work. It works with any harness that
+loads `SKILL.md` files.
+
 ## Development
 
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests
 ```
 
-The suite runs in about 8 seconds and covers credential redaction across every input format, doctor's version and
-environment-variable logic (including that it never writes to the repository), and the pw failure scenarios from the
-evaluation.
+The suite runs in about 15 seconds and covers credential redaction across every input format, doctor's version and
+environment-variable logic (including that it never writes to the repository), the pw failure scenarios from the
+evaluation, and receipt's deadline rules (late receipts, weekends, daylight saving time) and alert deduplication.
 
 ## Evaluation
 
