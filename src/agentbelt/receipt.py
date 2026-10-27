@@ -17,11 +17,19 @@ Usage:
       Report every expectation as ok, waiting, MISSING, LATE or STALE. Exits 1 if any is a problem.
       --alert runs CMD once per new problem (and once on recovery), with the message on stdin and
       RECEIPT_NAME, RECEIPT_STATUS and RECEIPT_MESSAGE in its environment.
+  receipt run NAME --outcome ok|failed|interrupted|skipped [--source S] [--detail KEY=VALUE ...]
+      Record that a run of NAME ended, as reported by the scheduler. The OpenClaw and Hermes plugins
+      in plugins/ do this automatically. A receipt is still needed: a run can end with a normal
+      reply when the work never happened.
   receipt log NAME [--limit N]
-      Recent receipts and their evidence.
+      Recent receipts and runs.
 
 A receipt counts toward the deadline it is closest to, and is on time if it arrives no later than
-the deadline plus the grace period. State is kept in $RECEIPT_HOME, or ~/.receipts by default.
+the deadline plus the grace period. When runs are recorded for a job, check says whether a run
+ended without a receipt (the work silently failed) or no run happened at all (the scheduler
+didn't fire it). State is kept in $RECEIPT_HOME, or ~/.receipts by default: expect.json,
+receipts.jsonl, runs.jsonl (one JSON object per line: name, at, outcome, source, detail) and
+alerts.json.
 """
 import argparse
 import difflib
@@ -60,10 +68,10 @@ def write_json(name, data):
     os.replace(tmp, path(name))
 
 
-def read_receipts():
+def read_lines(name):
     out = []
     try:
-        with open(path("receipts.jsonl")) as f:
+        with open(path(name)) as f:
             for line in f:
                 try:
                     out.append(json.loads(line))
@@ -74,11 +82,27 @@ def read_receipts():
     return out
 
 
-def append_receipt(rec):
+def read_receipts():
+    return read_lines("receipts.jsonl")
+
+
+def append_line(name, rec):
     os.makedirs(HOME, exist_ok=True)
     # one write() of one short line, so concurrent agents don't interleave
-    with open(path("receipts.jsonl"), "a") as f:
+    with open(path(name), "a") as f:
         f.write(json.dumps(rec) + "\n")
+
+
+def runs_by_name():
+    out = {}
+    for r in read_lines("runs.jsonl"):
+        try:
+            out.setdefault(r["name"], []).append(dict(r, t=parse_time(r["at"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    for runs in out.values():
+        runs.sort(key=lambda r: r["t"])
+    return out
 
 
 def now():
@@ -86,7 +110,7 @@ def now():
 
 
 def parse_time(s):
-    return datetime.fromisoformat(s)
+    return datetime.fromisoformat(s[:-1] + "+00:00" if s.endswith("Z") else s)
 
 
 def stamp(t):
@@ -150,8 +174,28 @@ def deadlines(spec, around):
     return out
 
 
-def evaluate(spec, times, at):
-    """Status of one expectation at time `at`, given the times of its receipts.
+def describe_run(run):
+    detail = run.get("detail") or {}
+    extra = ", ".join(f"{k}={v}" for k, v in detail.items())
+    return run.get("outcome", "?") + (f" ({extra})" if extra else "")
+
+
+def run_note(runs, since, at):
+    """What the scheduler reported since `since`, appended to a problem message.
+
+    Empty when no run was ever recorded for the job, which means no plugin reports its runs.
+    """
+    if not runs:
+        return ""
+    recent = [r for r in runs if since < r["t"] <= at]
+    if not recent:
+        return f"; no run recorded since {show_time(since, at)}"
+    r = recent[-1]
+    return f"; a run ended {show_time(r['t'], at)} and reported {describe_run(r)}"
+
+
+def evaluate(spec, times, at, runs=None):
+    """Status of one expectation at time `at`, given the times of its receipts and recorded runs.
 
     Returns a dict with status (ok, waiting, MISSING, LATE, STALE), message, and key. The key
     identifies the specific problem, so an alert fires once per missed deadline, not once per check.
@@ -171,7 +215,7 @@ def evaluate(spec, times, at):
         what = f"last receipt {show_time(last, at)}" if last else "no receipts yet"
         return {"status": "STALE", "key": f"stale@{stamp(since)}",
                 "message": f"nothing in {show_duration((at - since).total_seconds())}, expected every "
-                           f"{show_duration(every.total_seconds())} ({what})"}
+                           f"{show_duration(every.total_seconds())} ({what})" + run_note(runs, since, at)}
 
     ds = deadlines(spec, at)
     due = [i for i, d in enumerate(ds) if d > created and d + grace <= at]
@@ -196,7 +240,7 @@ def evaluate(spec, times, at):
                 "message": f"due {show_time(d, at)}, done {show_time(mine[0], at)} ({late} late); {nxt}".rstrip("; ")}
     before = f"last receipt {show_time(last, at)}" if last else "no receipts yet"
     return {"status": "MISSING", "key": f"missing@{stamp(d)}",
-            "message": f"due {show_time(d, at)}, no receipt ({before})"}
+            "message": f"due {show_time(d, at)}, no receipt ({before})" + run_note(runs, lo, at)}
 
 
 def describe_spec(spec):
@@ -282,7 +326,7 @@ def cmd_add(a):
         rec["note"] = a.note
     if a.check:
         rec["check"] = a.check
-    append_receipt(rec)
+    append_line("receipts.jsonl", rec)
     specs = read_json("expect.json", {})
     spec = specs.get(a.name)
     if not spec:
@@ -302,15 +346,32 @@ def cmd_add(a):
     return 0
 
 
+def cmd_run(a):
+    detail = {}
+    for item in a.detail:
+        key, sep, value = item.partition("=")
+        if not sep or not key.strip():
+            sys.exit(f"receipt run: bad detail {item!r}; use KEY=VALUE")
+        detail[key.strip()] = value.strip()
+    rec = {"name": a.name, "at": stamp(now()), "outcome": a.outcome, "source": a.source}
+    if detail:
+        rec["detail"] = detail
+    append_line("runs.jsonl", rec)
+    print(f"run of {a.name} recorded: {describe_run(rec)}")
+    return 0
+
+
 def check_all(at):
     specs = read_json("expect.json", {})
+    runs = runs_by_name()
     by_name = {}
     for r in read_receipts():
         try:
             by_name.setdefault(r["name"], []).append(parse_time(r["at"]))
         except (KeyError, TypeError, ValueError):
             continue
-    return [dict(name=name, **evaluate(spec, by_name.get(name, []), at)) for name, spec in sorted(specs.items())]
+    return [dict(name=name, **evaluate(spec, by_name.get(name, []), at, runs.get(name)))
+            for name, spec in sorted(specs.items())]
 
 
 def alert(cmd, name, status, message):
@@ -355,19 +416,22 @@ def cmd_check(a):
 
 
 def cmd_log(a):
-    recs = [r for r in read_receipts() if r.get("name") == a.name]
-    if not recs:
-        print(f"no receipts for {a.name}")
+    rows = []
+    for r in read_receipts():
+        if r.get("name") == a.name:
+            ev = " ".join(f"{k}={v}" for k, v in r.get("evidence", {}).items())
+            rows.append((parse_time(r["at"]), f"receipt  {ev}" + (f"  # {r['note']}" if r.get("note") else "")))
+    for r in runs_by_name().get(a.name, []):
+        rows.append((r["t"], f"run      {describe_run(r)}" + (f"  via {r['source']}" if r.get("source") else "")))
+    if not rows:
+        print(f"no receipts or runs for {a.name}")
         return 1
+    rows.sort(key=lambda row: row[0])
     ref = now()
-    for r in recs[-a.limit:]:
-        ev = " ".join(f"{k}={v}" for k, v in r.get("evidence", {}).items())
-        line = f"{show_time(parse_time(r['at']), ref)}  {ev}"
-        if r.get("note"):
-            line += f"  # {r['note']}"
-        print(line)
-    if len(recs) > a.limit:
-        print(f"({len(recs) - a.limit} older not shown; --limit to see more)")
+    for t, text in rows[-a.limit:]:
+        print(f"{show_time(t, ref)}  {text}")
+    if len(rows) > a.limit:
+        print(f"({len(rows) - a.limit} older not shown; --limit to see more)")
     return 0
 
 
@@ -392,13 +456,18 @@ def main():
     s = sub.add_parser("check")
     s.add_argument("--alert", metavar="CMD")
     s.add_argument("--json", action="store_true")
+    s = sub.add_parser("run")
+    s.add_argument("name")
+    s.add_argument("--outcome", required=True, choices=["ok", "failed", "interrupted", "skipped"])
+    s.add_argument("--source", default="cli")
+    s.add_argument("--detail", action="append", default=[], metavar="KEY=VALUE")
     s = sub.add_parser("log")
     s.add_argument("name")
     s.add_argument("--limit", type=int, default=20)
     a = ap.parse_args()
     if a.op == "expect" and a.remove and not a.name:
         ap.error("expect --remove needs NAME")
-    sys.exit({"expect": cmd_expect, "add": cmd_add, "check": cmd_check, "log": cmd_log}[a.op](a))
+    sys.exit({"expect": cmd_expect, "add": cmd_add, "run": cmd_run, "check": cmd_check, "log": cmd_log}[a.op](a))
 
 
 if __name__ == "__main__":

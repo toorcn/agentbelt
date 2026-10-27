@@ -1,0 +1,5 @@
+name: receipts
+version: 0.1.0
+description: "Record when each cron run ends, so `receipt check` can tell a run that ended without its receipt from a run that never happened."
+provides_hooks:
+  - on_session_end

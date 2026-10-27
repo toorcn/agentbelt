@@ -1,0 +1,8 @@
+{
+  "id": "receipts",
+  "name": "Receipts",
+  "description": "Record cron run outcomes so missing work can be told apart from runs that never happened.",
+  "categories": ["infrastructure"],
+  "activation": { "onStartup": true },
+  "configSchema": { "type": "object", "additionalProperties": false }
+}

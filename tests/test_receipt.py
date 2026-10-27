@@ -82,6 +82,38 @@ class Deadlines(unittest.TestCase):
         self.assertEqual(hours["2026-11-02"], "14:05")
 
 
+class Runs(unittest.TestCase):
+    """Recorded runs explain a missing receipt: the work failed silently, or nothing ran."""
+
+    def run_at(self, when, outcome="ok", **detail):
+        return {"t": when, "outcome": outcome, "detail": detail}
+
+    def test_run_without_receipt_is_called_out(self):
+        runs = [self.run_at(t(26, "09:01"), delivery="not-delivered")]
+        r = receipt.evaluate(daily(), [t(25, "08:58")], t(26, "09:30"), runs)
+        self.assertEqual(r["status"], "MISSING")
+        self.assertIn("a run ended today 09:01 and reported ok (delivery=not-delivered)", r["message"])
+
+    def test_no_run_at_all_is_called_out(self):
+        runs = [self.run_at(t(25, "09:01"))]
+        r = receipt.evaluate(daily(), [t(25, "08:58")], t(26, "09:30"), runs)
+        self.assertIn("no run recorded since", r["message"])
+
+    def test_jobs_without_recorded_runs_get_no_note(self):
+        r = receipt.evaluate(daily(), [], t(26, "09:30"), None)
+        self.assertNotIn("run", r["message"])
+
+    def test_stale_interval_mentions_the_last_run(self):
+        spec = {"every": 3600, "created": receipt.stamp(t(26, "00:00"))}
+        runs = [self.run_at(t(26, "02:00"), "failed", reason="max_iterations_reached")]
+        r = receipt.evaluate(spec, [t(26, "01:00")], t(26, "03:00"), runs)
+        self.assertEqual(r["status"], "STALE")
+        self.assertIn("reported failed (reason=max_iterations_reached)", r["message"])
+
+    def test_utc_z_timestamps_parse(self):
+        self.assertEqual(receipt.parse_time("2026-10-26T09:01:00Z"), t(26, "09:01"))
+
+
 class Intervals(unittest.TestCase):
     def spec(self, created=t(26, "00:00")):
         return {"every": 6 * 3600, "grace": 600, "created": receipt.stamp(created)}
@@ -181,6 +213,15 @@ class CommandLine(unittest.TestCase):
                      ["expect", "x", "--every", "soon"], ["expect", "x"], ["expect", "x", "--by", "09:00", "--tz", "Mars/Base"]]:
             with self.subTest(args=args):
                 self.assertNotEqual(self.receipt(*args).returncode, 0)
+
+    def test_recorded_runs_appear_in_check_and_log(self):
+        self.receipt("expect", "sync", "--every", "1s")
+        time.sleep(1.1)  # timestamps have one-second precision; the run must come after the expectation
+        r = self.receipt("run", "sync", "--outcome", "ok", "--source", "test", "--detail", "delivery=not-delivered")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        time.sleep(2.2)
+        self.assertIn("a run ended", self.receipt("check").stdout)
+        self.assertIn("run      ok (delivery=not-delivered)  via test", self.receipt("log", "sync").stdout)
 
     def test_truncated_receipt_line_is_skipped(self):
         self.receipt("expect", "sync", "--every", "1h")

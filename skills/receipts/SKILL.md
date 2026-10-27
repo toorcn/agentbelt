@@ -64,3 +64,5 @@ receipt expect feed-sync --every 6h
 ```
 
 Agents in containers need the `receipt` command and a shared `RECEIPT_HOME` directory, mounted from the host.
+The OpenClaw and Hermes plugins in agentbelt's `plugins/` folder also record when each cron run ends, so a missing
+receipt shows whether the run happened.

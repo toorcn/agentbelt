@@ -120,6 +120,10 @@ once on recovery, so it can run every few minutes from cron without repeating al
 and when not to: never before the result is verified, and never for partial work. It works with any harness that
 loads `SKILL.md` files.
 
+The [OpenClaw and Hermes Agent plugins](plugins/README.md) record when each cron run ends. With them, a missing
+receipt comes with the reason: either a run ended and reported success without doing the work, or no run happened
+at all.
+
 ## Development
 
 ```bash
@@ -128,7 +132,8 @@ PYTHONPATH=src python3 -m unittest discover -s tests
 
 The suite runs in about 15 seconds and covers credential redaction across every input format, doctor's version and
 environment-variable logic (including that it never writes to the repository), the pw failure scenarios from the
-evaluation, and receipt's deadline rules (late receipts, weekends, daylight saving time) and alert deduplication.
+evaluation, receipt's deadline rules (late receipts, weekends, daylight saving time) and alert deduplication, and
+both plugins. The OpenClaw plugin tests need Node and are skipped without it.
 
 ## Evaluation
 
