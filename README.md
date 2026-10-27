@@ -1,22 +1,68 @@
 # agentbelt
 
-Four small command-line tools for agents. Each one replaces a sequence of shell commands that agents commonly get
+[![tests](https://github.com/toorcn/agentbelt/actions/workflows/test.yml/badge.svg)](https://github.com/toorcn/agentbelt/actions/workflows/test.yml)
+![python](https://img.shields.io/badge/python-3.9%2B-blue)
+[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
+Four small command-line tools for AI agents. Each one replaces a sequence of shell commands that agents often get
 wrong or spend too many tokens on, or catches a failure that agents don't report.
 
-- **pw** runs dev servers in the background and reports when they are ready, crashed, or blocked by a port conflict.
-- **peek** summarizes large JSON, JSONL, CSV, SQLite, and log files in a few hundred tokens.
-- **doctor** reports how a repository is built and run, and what is missing on this machine.
-- **receipt** notices when scheduled agent work, such as a daily digest or a backup, silently stops happening.
+| Tool | Use it to | Instead of |
+|---|---|---|
+| `pw` | run a dev server and know when it's ready, crashed, or blocked by a stale instance | `cmd &`, `sleep`, `curl`, `kill` |
+| `peek` | see the structure of a large JSON, JSONL, CSV, SQLite or log file in a few hundred tokens | `cat`, `head`, repeated `jq` |
+| `doctor` | find out how a repository is built and run, and what's missing on this machine | reading manifests, configs and CI files |
+| `receipt` | notice when scheduled agent work, like a daily digest, silently stops happening | container health checks |
+
+No dependencies, Python 3.9+, macOS and Linux. Each tool is a single file that also runs without installing.
 
 ## Install
 
 ```bash
-pip install .
+uv tool install git+https://github.com/toorcn/agentbelt
 ```
 
-This installs the `pw`, `peek`, `doctor` and `receipt` commands. They need Python 3.9 or newer and nothing else.
-Each tool is also a standalone file, so `python3 src/agentbelt/peek.py data.json` works without installing.
-Tested on macOS with Python 3.9, 3.11, 3.12, 3.13 and 3.14.
+or
+
+```bash
+pip install git+https://github.com/toorcn/agentbelt
+```
+
+To try one tool without installing anything:
+
+```bash
+uvx --from git+https://github.com/toorcn/agentbelt peek data.json
+```
+
+## Quick start
+
+```bash
+pw start web -- npm run dev   # returns once the server answers, or says why it didn't
+peek logs/app.log             # levels, failing tests and repeated errors in a large log
+doctor                        # how this repo is built, and what's missing here
+receipt check                 # scheduled jobs that didn't report their work as done
+```
+
+Every tool has `--help`. `peek`, `doctor` and `receipt check` take `--json` for structured output.
+
+## Use with your agent
+
+Agents don't go looking for a tool when they don't know they have a problem. An agent testing a stale server
+gets a `200` and moves on. Tell it the tools exist by adding this to your `AGENTS.md`, `CLAUDE.md`, or whatever
+instructions file your harness reads:
+
+```markdown
+## Command-line tools
+
+- Start dev servers and watchers with `pw start NAME -- CMD`, not `CMD &`. It returns once the server is
+  ready and fails if an old instance still holds the port. `pw logs NAME --new` shows new output and
+  `pw stop NAME` stops it.
+- Before reading a JSON, JSONL, CSV, SQLite or log file larger than about 100 KB, run `peek FILE`.
+- In a repository you haven't worked in before, run `doctor` first.
+```
+
+For scheduled agents, install the [receipts skill](skills/receipts/SKILL.md), and the
+[OpenClaw or Hermes Agent plugin](plugins/README.md) if you use one of those.
 
 ## pw
 
@@ -124,16 +170,21 @@ The [OpenClaw and Hermes Agent plugins](plugins/README.md) record when each cron
 receipt comes with the reason: either a run ended and reported success without doing the work, or no run happened
 at all.
 
-## Development
+## How it compares
 
-```bash
-PYTHONPATH=src python3 -m unittest discover -s tests
-```
-
-The suite runs in about 15 seconds and covers credential redaction across every input format, doctor's version and
-environment-variable logic (including that it never writes to the repository), the pw failure scenarios from the
-evaluation, receipt's deadline rules (late receipts, weekends, daylight saving time) and alert deduplication, and
-both plugins. The OpenClaw plugin tests need Node and are skipped without it.
+- **pm2, Overmind, or your harness's background shell** keep processes running. pw is built for an agent's
+  edit-and-restart loop: one call that returns when the server is ready, and fails loudly when an old instance
+  still owns the port, which is how agents end up testing code that isn't running.
+- **jq and DuckDB** answer questions you already know to ask. peek shows what's in the file, including value
+  sets, optional fields and maps keyed by ID, so you know what to ask.
+- **A README** explains how a project is meant to be set up. doctor checks this machine against it: toolchain
+  versions, installed dependencies, and required environment variables.
+- **Healthchecks.io and Cronitor** do the deadline-and-alert part well and integrate with more alert channels.
+  If you already use one, have the agent ping it instead of running `receipt add`. receipt is for keeping it
+  local, attaching evidence, refusing a receipt when a verification command fails, and, with the plugins,
+  telling a run that did no work apart from a run that never happened.
+- **rtk** compresses the output of commands an agent already runs. agentbelt replaces multi-step workflows with
+  one command. The two work together.
 
 ## Evaluation
 
@@ -145,9 +196,24 @@ python3 bench/bench_peek.py path/to/repos
 python3 bench/bench_doctor.py path/to/repos
 ```
 
+## Contributing
+
+Issues and pull requests are welcome. Keep each tool a single file with no dependencies outside the standard
+library, so it can be copied onto any machine.
+
+```bash
+git clone https://github.com/toorcn/agentbelt && cd agentbelt
+PYTHONPATH=src python3 -m unittest discover -s tests
+```
+
+The suite runs in under 20 seconds. It covers credential redaction across every input format, doctor's version
+and environment-variable logic (including that it never writes to the repository), the pw failure scenarios from
+the evaluation, receipt's deadline rules (late receipts, weekends, daylight saving time) and alert deduplication,
+and both plugins. The OpenClaw plugin tests need Node and are skipped without it.
+
 ## Status
 
-Research prototypes. The interfaces may change.
+Early, and the interfaces may still change. Not yet on PyPI.
 
 ## License
 
